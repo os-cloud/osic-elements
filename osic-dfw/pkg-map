@@ -1,0 +1,15 @@
+{
+  "distro":{
+    "ubuntu":{
+      "kmod-i40e": "linux-image-generic-lts-xenial"
+    }
+  },
+  "family":{
+    "redhat":{
+      "kmod-i40e": "kmod-i40e"
+    }
+  },
+  "default":{
+      "kmod-i40e": "linux-image-generic-lts-xenial"
+  }
+}
