@@ -24,6 +24,12 @@ fi
 set -eu
 set -o pipefail
 
+if [ ${OSIC_DEBUG:-0} -gt 0 ]; then
+  ### USED FOR TO ALLOW CONSOLE DEBUG. Remove this line in prod
+  echo -e "secrete\nsecrete\n" | passwd root
+  ### USED FOR TO ALLOW CONSOLE DEBUG. Remove this line in prod
+fi
+
 source /etc/os-release 2>/dev/null
 export DISTRO_ID="${ID}"
 export DISTRO_NAME="${NAME}"
@@ -34,23 +40,103 @@ function debian_deploy {
   apt-get update
   DEBIAN_FRONTEND="noninteractive" apt-get -y install bridge-utils vlan ifenslave
 
+  # Remove the cloud init network interface file if found.
+  if [ -f "/etc/network/interfaces.d/50-cloud-init.cfg" ];then
+    rm /etc/network/interfaces.d/50-cloud-init.cfg 
+  fi
+
   if ! grep -qw "^bonding" /etc/modules; then
     echo "bonding" >> /etc/modules
   fi
+
+  # Identify the bond slaves
+  export SLAVEONE="${SLAVEONE:-p1p1}"
+  export SLAVETWO="${SLAVETWO:-p4p1}"
+
+  cat >/etc/network/interfaces <<EOF
+# Loop back
+auto lo
+iface lo inet loopback
+
+# Bond slave1
+auto ${SLAVEONE}
+iface ${SLAVEONE} inet manual
+    bond-master bond0
+    bond-primary ${SLAVEONE}
+
+# Bond slave2
+auto ${SLAVETWO}
+iface ${SLAVETWO} inet manual
+    bond-master bond0
+
+# Bond
+auto bond0
+iface bond0 inet dhcp
+    bond-slaves none
+    bond-mode active-backup
+    bond-miimon 100
+    bond-downdelay 200
+    bond-updelay 200
+EOF
 
 }
 
 function deploy_centos {
   yum -y install bridge-utils
 
+  # Ensure the i40e drivers are loaded
   echo -e '# Load i40e drivers\ni40e' > /etc/modules-load.d/i40e.conf
 
+  # Ensure bonding is loaded
   echo -e '# Load bonding drivers\nbonding' > /etc/modules-load.d/bonding.conf
 
-  if [ -f "/etc/sysconfig/network-scripts/ifcfg-eth0" ]; then
-    ln -s /etc/sysconfig/network-scripts/ifcfg-eth0 /etc/sysconfig/network-scripts/ifcfg-ens1f0
-    ln -s /etc/sysconfig/network-scripts/ifcfg-eth0 /etc/sysconfig/network-scripts/ifcfg-p1p1
-  fi
+  # Identify the bond slaves
+  export SLAVEONE="${SLAVEONE:-ens1f0}"
+  export SLAVETWO="${SLAVETWO:-ens4f0}"
+
+  cat > /etc/sysconfig/network-scripts/ifcfg-${SLAVEONE} <<EOF
+DEVICE="${SLAVEONE}"
+DEFROUTE="yes"
+PEERDNS="yes"
+PEERROUTES="yes"
+BOOTPROTO="none"
+ONBOOT="yes"
+MASTER="bond0"
+SLAVE="yes"
+TYPE="Ethernet"
+USERCTL="yes"
+IPV6INIT="no"
+EOF
+  cat > /etc/sysconfig/network-scripts/ifcfg-${SLAVETWO} <<EOF
+DEVICE="${SLAVETWO}"
+DEFROUTE="yes"
+PEERDNS="yes"
+PEERROUTES="yes"
+BOOTPROTO="none"
+ONBOOT="yes"
+MASTER="bond0"
+SLAVE="yes"
+TYPE="Ethernet"
+USERCTL="yes"
+IPV6INIT="no"
+EOF
+  cat > /etc/sysconfig/network-scripts/ifcfg-bond0 <<EOF
+DEVICE="bond0"
+BOOTPROTO="dhcp"
+NAME="bond0"
+TYPE="Bond"
+BONDING_MASTER=yes
+ONBOOT="yes"
+BOOTPROTO="dhcp"
+BONDING_OPTS="mode=4 lacp_rate=1 xmit_hash_policy=layer3+4 miimon=100"
+IPV4_FAILURE_FATAL="no"
+IPV6INIT="yes"
+IPV6_AUTOCONF="yes"
+IPV6_DEFROUTE="yes"
+IPV6_PEERDNS="yes"
+IPV6_PEERROUTES="yes"
+IPV6_FAILURE_FATAL="no"
+EOF
 
 }
 
